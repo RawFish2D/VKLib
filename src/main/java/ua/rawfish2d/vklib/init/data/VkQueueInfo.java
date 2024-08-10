@@ -11,17 +11,17 @@ import static org.lwjgl.vulkan.VK10.vkDestroyCommandPool;
 public class VkQueueInfo {
 	private final VkDevice vkLogicalDevice;
 	private final VkQueue queue;
-	private final VkQueueIndexInfo queueInfo;
+	private final VkQueueIndexInfo indexInfo;
 	private long vkCommandPool = 0;
 
 	public VkQueueInfo(VkDevice vkLogicalDevice, VkQueue queue, VkQueueIndexInfo queueInfo) {
 		this.vkLogicalDevice = vkLogicalDevice;
 		this.queue = queue;
-		this.queueInfo = queueInfo;
+		this.indexInfo = queueInfo;
 	}
 
 	public void createCommandPool() {
-		this.vkCommandPool = VkHelper.createCommandPool(vkLogicalDevice, queueInfo.queueIndex());
+		this.vkCommandPool = VkHelper.createCommandPool(vkLogicalDevice, indexInfo.queueIndex());
 	}
 
 	public void destroyCommandPool() {

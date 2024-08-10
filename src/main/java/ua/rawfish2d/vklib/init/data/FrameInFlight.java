@@ -2,14 +2,14 @@ package ua.rawfish2d.vklib.init.data;
 
 import lombok.Getter;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkFenceCreateInfo;
-import org.lwjgl.vulkan.VkSemaphoreCreateInfo;
+import org.lwjgl.vulkan.*;
+import ua.rawfish2d.vklib.VkBuffer;
 import ua.rawfish2d.vklib.init.VkDeviceInstance;
+import ua.rawfish2d.vklib.init.descriptor.DescriptorSetUpdate;
 import ua.rawfish2d.vklib.utils.VkHelper;
 
 import java.nio.LongBuffer;
+import java.util.List;
 
 import static org.lwjgl.vulkan.VK10.*;
 
@@ -20,6 +20,12 @@ public class FrameInFlight {
 	private final long vkInFlightFence;
 	private VkCommandBuffer vkCommandBuffer;
 	private long vkCommandPool;
+	private VkBuffer uniformBuffer;
+	private long vkDescriptorSet;
+
+	public void setDescriptorSet(long vkDescriptorSet) {
+		this.vkDescriptorSet = vkDescriptorSet;
+	}
 
 	public FrameInFlight(VkDevice vkLogicalDevice) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -52,10 +58,25 @@ public class FrameInFlight {
 		this.vkCommandBuffer = VkHelper.createCommandBuffer(vkDeviceInstance.getVkLogicalDevice(), vkCommandPool);
 	}
 
-	public void free(VkDevice vkLogicalDevice) {
+	public void free(VkDeviceInstance vkDeviceInstancee) {
+		final VkDevice vkLogicalDevice = vkDeviceInstancee.getVkLogicalDevice();
+		uniformBuffer.destroyAndFreeMemory(vkDeviceInstancee);
 		vkDestroySemaphore(vkLogicalDevice, vkImageAvailableSemaphore, null);
 		vkDestroySemaphore(vkLogicalDevice, vkRenderFinishedSemaphore, null);
 		vkDestroyFence(vkLogicalDevice, vkInFlightFence, null);
 		vkFreeCommandBuffers(vkLogicalDevice, vkCommandPool, vkCommandBuffer);
+	}
+
+	public void createUniformBuffer(VkDeviceInstance vkDeviceInstance, int bufferSize) {
+		this.uniformBuffer = new VkBuffer();
+		System.out.printf("Creating new Uniform Buffer size: %d\n", bufferSize);
+		uniformBuffer.createBuffer(vkDeviceInstance, bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+		uniformBuffer.allocateMemory(vkDeviceInstance, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		uniformBuffer.makeStagingBuffer(vkDeviceInstance, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+	}
+
+	public void updateDescriptorSet(VkDeviceInstance vkDeviceInstance, List<DescriptorSetUpdate> descriptorSetUpdates) {
+		final VkWriteDescriptorSet.Buffer descriptorWrite = VkDeviceInstance.makeWriteDescriptorSet(vkDescriptorSet, descriptorSetUpdates);
+		vkUpdateDescriptorSets(vkDeviceInstance.getVkLogicalDevice(), descriptorWrite, null);
 	}
 }

@@ -7,7 +7,10 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 import ua.rawfish2d.vklib.WindowVK;
 import ua.rawfish2d.vklib.init.data.*;
+import ua.rawfish2d.vklib.init.descriptor.DescriptorSetUpdate;
+import ua.rawfish2d.vklib.init.descriptor.VkDescriptorSetLayout;
 import ua.rawfish2d.vklib.utils.VkHelper;
+import ua.rawfish2d.vklib.utils.VkTranslate;
 
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
@@ -15,6 +18,7 @@ import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.IntStream;
 
 import static org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface;
 import static org.lwjgl.glfw.GLFWVulkan.glfwGetRequiredInstanceExtensions;
@@ -42,6 +46,8 @@ public class VkDeviceInstance {
 	private String applicationName = "Vulkan App";
 	private String engineName = "No Engine";
 	private int vulkanVersion = VK_API_VERSION_1_3;
+	private boolean transparentFramebuffer = false;
+	private long vkDescriptorPool;
 	// swap chain stuff
 	private boolean vsync = true;
 	private int swapChainImageCount = 2; // also frames in flight count
@@ -51,6 +57,7 @@ public class VkDeviceInstance {
 	private LongBuffer vkSwapChainImages;
 	private long[] vkSwapChainImageViews;
 	private boolean shouldRecreateSwapChain = false;
+	private int currentImageIndex;
 	// frame in flight stuff
 	private final IntBuffer pCurrentFrameIndex = memAllocInt(1);
 	private int currentFrame = 0;
@@ -93,6 +100,11 @@ public class VkDeviceInstance {
 		return this;
 	}
 
+	public VkDeviceInstance transparentFramebuffer(boolean transparentFramebuffer) {
+		this.transparentFramebuffer = transparentFramebuffer;
+		return this;
+	}
+
 	public VkDeviceInstance create(WindowVK window) {
 		this.windowVK = window;
 		createInstance(enableValidationLayers);
@@ -100,7 +112,7 @@ public class VkDeviceInstance {
 			final LongBuffer pSurface = stack.mallocLong(1);
 			final int result = glfwCreateWindowSurface(vkInstance, window.getHandle(), null, pSurface);
 			if (result != VK_SUCCESS) {
-				throw new AssertionError("Failed to create window surface! Error: " + VkHelper.translateVulkanResult(result));
+				throw new AssertionError("Failed to create window surface! Error: " + VkTranslate.translateVulkanResult(result));
 			}
 			vkSurface = pSurface.get(0);
 		}
@@ -154,7 +166,7 @@ public class VkDeviceInstance {
 			final int result = vkCreateInstance(createInfo, null, pInstance);
 			final long instance = pInstance.get(0);
 			if (result != VK_SUCCESS) {
-				throw new AssertionError("Failed to create VkInstance: " + VkHelper.translateVulkanResult(result));
+				throw new AssertionError("Failed to create VkInstance: " + VkTranslate.translateVulkanResult(result));
 			}
 			vkInstance = new VkInstance(instance, createInfo);
 		}
@@ -168,7 +180,7 @@ public class VkDeviceInstance {
 			final IntBuffer pPhysicalDeviceCount = stack.mallocInt(1);
 			int result = vkEnumeratePhysicalDevices(vkInstance, pPhysicalDeviceCount, null);
 			if (result != VK_SUCCESS) {
-				throw new AssertionError("Failed to get number of physical devices: " + VkHelper.translateVulkanResult(result));
+				throw new AssertionError("Failed to get number of physical devices: " + VkTranslate.translateVulkanResult(result));
 			}
 			final int deviceCount = pPhysicalDeviceCount.get(0);
 			if (deviceCount == 0) {
@@ -180,17 +192,6 @@ public class VkDeviceInstance {
 
 	private void pickPhysicalDevice() {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
-//			// get GPU count
-//			final IntBuffer pPhysicalDeviceCount = stack.mallocInt(1);
-//			int result = vkEnumeratePhysicalDevices(vkInstance, pPhysicalDeviceCount, null);
-//			if (result != VK_SUCCESS) {
-//				throw new AssertionError("Failed to get number of physical devices: " + VkHelper.translateVulkanResult(result));
-//			}
-//			final int deviceCount = pPhysicalDeviceCount.get(0);
-//			if (deviceCount == 0) {
-//				throw new AssertionError("Failed to find physical devices with Vulkan support!");
-//			}
-//			System.out.printf("🔷 Found %d physical devices with Vulkan support.\n", deviceCount);
 			final int deviceCount = getNumberOfVulkanPhysicalDevices();
 			final IntBuffer pPhysicalDeviceCount = stack.mallocInt(1);
 			pPhysicalDeviceCount.put(0, deviceCount);
@@ -203,7 +204,7 @@ public class VkDeviceInstance {
 				throw new RuntimeException("Cannot find suitable physical device!");
 			}
 			if (result != VK_SUCCESS) {
-				throw new AssertionError("Failed to get physical devices: " + VkHelper.translateVulkanResult(result));
+				throw new AssertionError("Failed to get physical devices: " + VkTranslate.translateVulkanResult(result));
 			}
 			this.vkPhysicalDevice = new VkPhysicalDevice(physicalDevice, vkInstance);
 		}
@@ -302,7 +303,7 @@ public class VkDeviceInstance {
 			final PointerBuffer pDevice = stack.mallocPointer(1);
 			final int result = vkCreateDevice(vkPhysicalDevice, createInfo, null, pDevice);
 			if (result != VK_SUCCESS) {
-				throw new AssertionError("Failed to create logical device! Error code: " + VkHelper.translateVulkanResult(result));
+				throw new AssertionError("Failed to create logical device! Error code: " + VkTranslate.translateVulkanResult(result));
 			}
 			this.vkLogicalDevice = new VkDevice(pDevice.get(0), vkPhysicalDevice, createInfo);
 			System.out.printf("🔷 Logical device created: %d\n", vkLogicalDevice.address());
@@ -314,7 +315,7 @@ public class VkDeviceInstance {
 				vkGetDeviceQueue(vkLogicalDevice, queueInfo.queueIndex(), 0, pQueue);
 				final long vkQueueHandle = pQueue.get(0);
 				final VkQueue vkQueue = new VkQueue(vkQueueHandle, vkLogicalDevice);
-				System.out.printf("🔷 vkGetDeviceQueue queue type: %s | index: %d | present: %b | handle: %s\n", VkHelper.translateQueueBit(queueInfo.queueType()), queueInfo.queueIndex(), queueInfo.presentSupport(), String.format("0x%08x", vkQueueHandle));
+				System.out.printf("🔷 vkGetDeviceQueue queue type: %s | index: %d | present: %b | handle: %s\n", VkTranslate.translateQueueBit(queueInfo.queueType()), queueInfo.queueIndex(), queueInfo.presentSupport(), String.format("0x%08x", vkQueueHandle));
 				this.vkQueueDataList.add(new VkQueueInfo(vkLogicalDevice, vkQueue, queueInfo));
 			}
 		}
@@ -341,9 +342,9 @@ public class VkDeviceInstance {
 
 	private VkQueueInfo getQueue(int type, boolean getWithPresent) {
 		for (VkQueueInfo queue2 : vkQueueDataList) {
-			if ((queue2.getQueueInfo().queueType() & type) == type) {
+			if ((queue2.getIndexInfo().queueType() & type) == type) {
 				if (getWithPresent) {
-					if (queue2.getQueueInfo().presentSupport()) {
+					if (queue2.getIndexInfo().presentSupport()) {
 						return queue2;
 					} else {
 						return null;
@@ -357,7 +358,7 @@ public class VkDeviceInstance {
 
 	public VkQueueInfo getVkGraphicsQueue() {
 		for (VkQueueInfo queue2 : vkQueueDataList) {
-			if ((queue2.getQueueInfo().queueType() & VK_QUEUE_GRAPHICS_BIT) == VK_QUEUE_GRAPHICS_BIT) {
+			if ((queue2.getIndexInfo().queueType() & VK_QUEUE_GRAPHICS_BIT) == VK_QUEUE_GRAPHICS_BIT) {
 				return queue2;
 			}
 		}
@@ -366,7 +367,7 @@ public class VkDeviceInstance {
 
 	public VkQueueInfo getVkPresentQueue() {
 		for (VkQueueInfo queue2 : vkQueueDataList) {
-			if (queue2.getQueueInfo().presentSupport()) {
+			if (queue2.getIndexInfo().presentSupport()) {
 				return queue2;
 			}
 		}
@@ -375,7 +376,7 @@ public class VkDeviceInstance {
 
 	public VkQueueInfo getVkTransferQueue() {
 		for (VkQueueInfo queue2 : vkQueueDataList) {
-			if ((queue2.getQueueInfo().queueType() & VK_QUEUE_TRANSFER_BIT) == VK_QUEUE_TRANSFER_BIT) {
+			if ((queue2.getIndexInfo().queueType() & VK_QUEUE_TRANSFER_BIT) == VK_QUEUE_TRANSFER_BIT) {
 				return queue2;
 			}
 		}
@@ -390,36 +391,38 @@ public class VkDeviceInstance {
 		vkGetPhysicalDeviceQueueFamilyProperties(device, pQueueFamilyCount, vkQueueFamilyPropertiesBuffer);
 
 		final List<VkQueueIndexInfo> queueInfoList = new ArrayList<>();
-		System.out.printf("🔷 vkGetPhysicalDeviceQueueFamilyProperties queueFamilyCount: %d\n", queueFamilyCount);
+		System.out.printf("🔷 Queue family count: %d\n", queueFamilyCount);
 		final int[] presentSupportRef = new int[1];
 		for (int index = 0; index < queueFamilyCount; ++index) {
 			final VkQueueFamilyProperties queueFamilyProperties = vkQueueFamilyPropertiesBuffer.get(index);
 			final int flags = queueFamilyProperties.queueFlags();
 			vkGetPhysicalDeviceSurfaceSupportKHR(device, index, vkSurface, presentSupportRef);
-			final int presentSupport = presentSupportRef[0];
+			final boolean presentSupport = presentSupportRef[0] == 1;
 
-			if ((flags & VK_QUEUE_GRAPHICS_BIT) == VK_QUEUE_GRAPHICS_BIT) {
-				if (VkQueueIndexInfo.getByIndex(queueInfoList, index) == null) {
-					queueInfoList.add(new VkQueueIndexInfo(index, false, flags));
-				}
-			}
+			queueInfoList.add(new VkQueueIndexInfo(index, presentSupport, flags));
 
-			if ((flags & VK_QUEUE_GRAPHICS_BIT) != VK_QUEUE_GRAPHICS_BIT && presentSupport == 1) {
-				if (VkQueueIndexInfo.getByIndex(queueInfoList, index) == null) {
-					queueInfoList.add(new VkQueueIndexInfo(index, true, flags));
-				}
-			}
-
-			if ((flags & VK_QUEUE_TRANSFER_BIT) == VK_QUEUE_TRANSFER_BIT) {
-				if (VkQueueIndexInfo.getByIndex(queueInfoList, index) == null) {
-					queueInfoList.add(new VkQueueIndexInfo(index, false, flags));
-				}
-			}
-			System.out.printf("🔷 Queue %d presentSupport %d flags %d - %s\n", index, presentSupport, flags, VkHelper.translateQueueBit(flags));
+//			if ((flags & VK_QUEUE_GRAPHICS_BIT) == VK_QUEUE_GRAPHICS_BIT) {
+//				if (VkQueueIndexInfo.getByIndex(queueInfoList, index) == null) {
+//					queueInfoList.add(new VkQueueIndexInfo(index, false, flags));
+//				}
+//			}
+//
+//			if ((flags & VK_QUEUE_GRAPHICS_BIT) != VK_QUEUE_GRAPHICS_BIT && presentSupport == 1) {
+//				if (VkQueueIndexInfo.getByIndex(queueInfoList, index) == null) {
+//					queueInfoList.add(new VkQueueIndexInfo(index, true, flags));
+//				}
+//			}
+//
+//			if ((flags & VK_QUEUE_TRANSFER_BIT) == VK_QUEUE_TRANSFER_BIT) {
+//				if (VkQueueIndexInfo.getByIndex(queueInfoList, index) == null) {
+//					queueInfoList.add(new VkQueueIndexInfo(index, false, flags));
+//				}
+//			}
+			System.out.printf("🔷 Found queue: %d | present support: %b | flags: %d | type: %s\n", index, presentSupport, flags, VkTranslate.translateQueueBit(flags));
 		}
 		System.out.printf("🔷 Selected queues:\n");
 		for (VkQueueIndexInfo queueInfo : queueInfoList) {
-			System.out.printf("\tindex: %d | present support: %b | type: %s\n", queueInfo.queueIndex(), queueInfo.presentSupport(), VkHelper.translateQueueBit(queueInfo.queueType()));
+			System.out.printf("\tindex: %d | present support: %b | type: %s\n", queueInfo.queueIndex(), queueInfo.presentSupport(), VkTranslate.translateQueueBit(queueInfo.queueType()));
 		}
 		return queueInfoList;
 	}
@@ -429,14 +432,16 @@ public class VkDeviceInstance {
 		if (requiredExtensions == null) {
 			throw new AssertionError("Failed to get required instance extensions!");
 		}
-		final PointerBuffer ppEnabledExtensionNames = stack.mallocPointer(requiredExtensions.remaining());
+		final int requiredExtensionsCount = requiredExtensions.capacity();
+		final PointerBuffer ppEnabledExtensionNames = stack.mallocPointer(requiredExtensionsCount);
 		ppEnabledExtensionNames.put(requiredExtensions);
 		ppEnabledExtensionNames.flip();
 
-		for (int index = 0; index < requiredExtensions.capacity(); ++index) {
+		System.out.printf("🔷 Required extensions: %d\n", requiredExtensionsCount);
+		for (int index = 0; index < requiredExtensionsCount; ++index) {
 			long pointer = requiredExtensions.get(index);
 			String string = memUTF8(pointer);
-			System.out.printf("Required extension [%d] %s\n", index, string);
+			System.out.printf("\t[%d] %s\n", index, string);
 		}
 
 		return ppEnabledExtensionNames;
@@ -612,7 +617,8 @@ public class VkDeviceInstance {
 			} else {
 				vkExtent2D = extent;
 			}
-			System.out.printf("Chosen format: %s\n", VkHelper.translateSurfaceFormatBit(vkSwapChainImageFormat));
+			System.out.printf("Chosen format: %s\n", VkTranslate.translateSurfaceFormatBit(vkSwapChainImageFormat));
+			System.out.printf("Chosen present mode: %s\n", VkTranslate.translatePresentMode(presentMode));
 
 			final VkSwapchainCreateInfoKHR swapchainCreateInfoKHR = VkSwapchainCreateInfoKHR.calloc(stack)
 					.sType$Default()
@@ -629,14 +635,21 @@ public class VkDeviceInstance {
 					.clipped(true)
 					.oldSwapchain(NULL);
 
+			// doesn't matter lmao, is can still be transparent or not (depends on GLFW flags and ClearColor)
+//			if (transparentFramebuffer) {
+//				swapchainCreateInfoKHR.compositeAlpha(VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR); // transparent framebuffer
+//			} else {
+//				swapchainCreateInfoKHR.compositeAlpha(VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR); // non transparent framebuffer
+//			}
+
 			final List<VkQueueInfo> queues = getVkQueueDataList();
 			System.out.printf("🔷 queue count: %d\n", queues.size());
 
 			final IntBuffer queueFamilyIndices = stack.mallocInt(queues.size());
 			int index = 0;
 			for (VkQueueInfo queue2 : queues) {
-				System.out.printf("\t[swapchainCreateInfoKHR] queueFamilyIndices [%d]: %d\n", index, queue2.getQueueInfo().queueIndex());
-				queueFamilyIndices.put(index, queue2.getQueueInfo().queueIndex());
+				System.out.printf("\t[swapchainCreateInfoKHR] queueFamilyIndices [%d]: %d\n", index, queue2.getIndexInfo().queueIndex());
+				queueFamilyIndices.put(index, queue2.getIndexInfo().queueIndex());
 				index++;
 			}
 			if (queues.size() > 1) {
@@ -698,9 +711,9 @@ public class VkDeviceInstance {
 				System.out.printf("[%d] VkSurfaceFormatKHR colorSpace: %d %s | format: %d %s \n",
 						formatIndex,
 						availableFormat.colorSpace(),
-						VkHelper.translateColorSpace(availableFormat.colorSpace()),
+						VkTranslate.translateColorSpace(availableFormat.colorSpace()),
 						availableFormat.format(),
-						VkHelper.translateSurfaceFormatBit(availableFormat.format()));
+						VkTranslate.translateSurfaceFormatBit(availableFormat.format()));
 
 				if (maxArrayLayers != 0 &&
 						imageFormatProperties.maxExtent().width() > 0 &&
@@ -721,6 +734,8 @@ public class VkDeviceInstance {
 			if (vsync) {
 				if (presentMode == VK_PRESENT_MODE_MAILBOX_KHR ||
 						presentMode == VK_PRESENT_MODE_FIFO_KHR) {
+					return presentMode;
+				} else if (presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
 					return presentMode;
 				}
 			} else if (presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR) {
@@ -762,7 +777,7 @@ public class VkDeviceInstance {
 		}
 	}
 
-	public int acquireImage() {
+	public void acquireImage() {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			final long UINT64_MAX = 0xFFFFFFFFFFFFFFFFL;
 			final FrameInFlight frameInFlight = frameInFlights.get(currentFrame);
@@ -790,12 +805,12 @@ public class VkDeviceInstance {
 
 			if (acquireNextImageKHRResult == VK_ERROR_OUT_OF_DATE_KHR) {
 				recreateSwapChain(stack);
-				return -1;
+				this.currentImageIndex = 0;
 			} else if (acquireNextImageKHRResult != VK_SUCCESS && acquireNextImageKHRResult != VK_SUBOPTIMAL_KHR) {
-				throw new RuntimeException("Failed to acquire swap chain image!");
+				throw new RuntimeException(String.format("Failed to acquire swap chain image! %d | %s", acquireNextImageKHRResult, VkTranslate.translateVulkanResult(acquireNextImageKHRResult)));
 			}
 			vkResetFences(vkLogicalDevice, frameInFlight.getVkInFlightFence());
-			return imageIndex;
+			this.currentImageIndex = imageIndex;
 		}
 	}
 
@@ -810,7 +825,7 @@ public class VkDeviceInstance {
 			sleep(100);
 			return;
 		}
-		System.out.printf("SwapChain creation. Framebuffer %d %d, extent %d %d\n", fbWidth.get(0), fbHeight.get(0), vkExtent2D.width(), vkExtent2D.height());
+		System.out.printf("SwapChain creation. New size: %d %d | old size: %d %d\n", fbWidth.get(0), fbHeight.get(0), vkExtent2D.width(), vkExtent2D.height());
 
 		vkDeviceWaitIdle(vkLogicalDevice);
 
@@ -857,7 +872,7 @@ public class VkDeviceInstance {
 		System.out.println("🔷 Device Properties");
 		System.out.printf("\tDevice ID: %d \n", deviceProperties.deviceID());
 		System.out.printf("\tDevice name string: %s \n", deviceProperties.deviceNameString());
-		System.out.printf("\tDevice type: %s \n", VkHelper.translatePhysicalDeviceType(deviceProperties.deviceType()));
+		System.out.printf("\tDevice type: %s \n", VkTranslate.translatePhysicalDeviceType(deviceProperties.deviceType()));
 		System.out.printf("\tVendor ID: %d \n", deviceProperties.vendorID());
 
 		final int apiVersion = deviceProperties.apiVersion();
@@ -919,12 +934,13 @@ public class VkDeviceInstance {
 		for (long imageView : vkSwapChainImageViews) {
 			vkDestroyImageView(vkLogicalDevice, imageView, null);
 		}
+		vkDestroyDescriptorPool(vkLogicalDevice, vkDescriptorPool, null);
 		memFree(vkSwapChainImages);
 		memFree(pCurrentFrameIndex);
 		vkDestroySwapchainKHR(vkLogicalDevice, vkSwapchainKHR, null);
 
 		for (FrameInFlight frameInFlight : frameInFlights) {
-			frameInFlight.free(vkLogicalDevice);
+			frameInFlight.free(this);
 		}
 		frameInFlights.clear();
 
@@ -952,7 +968,7 @@ public class VkDeviceInstance {
 			submitInfoBuffer.put(0, submitInfo);
 			final int result = vkQueueSubmit2(graphicsQueue.getQueue(), submitInfoBuffer, frameInFlight.getVkInFlightFence());
 			if (result != VK_SUCCESS) {
-				throw new RuntimeException("Failed to submit command buffer! " + VkHelper.translateVulkanResult(result));
+				throw new RuntimeException("Failed to submit command buffer! " + VkTranslate.translateVulkanResult(result));
 			}
 		}
 	}
@@ -988,7 +1004,7 @@ public class VkDeviceInstance {
 			VkHelper.beginRendering(stack, commandBuffer,
 					vkSwapChainImages.get(imageIndex),
 					vkSwapChainImageViews[imageIndex],
-					VkHelper.vkGetClearValue(stack, 0, 0, 0, 255),
+					VkHelper.vkGetClearValue(stack, 0, 0, 0, 0),
 					vkExtent2D.width(),
 					vkExtent2D.height());
 
@@ -1035,5 +1051,194 @@ public class VkDeviceInstance {
 
 			currentFrame = (currentFrame + 1) % swapChainImageCount;
 		}
+	}
+
+	/**
+	 * Create uniform buffers for every FrameInFlight object
+	 */
+	public void createUniformBuffers(int bufferSize) {
+		for (FrameInFlight frameInFlight : frameInFlights) {
+			frameInFlight.createUniformBuffer(this, bufferSize);
+		}
+	}
+
+	public void createDescriptorStuff(VkDescriptorSetLayout vkDescriptorSetLayout) {
+//		final int descriptorPoolSize = descriptorSetLayout.calculateDescriptorPoolSize(uniformBuffersCount);
+		createDescriptorPool(vkDescriptorSetLayout, frameInFlights.size());
+		createDescriptorSetsForFramesInFlight(vkDescriptorSetLayout);
+	}
+
+	private void createDescriptorPool(VkDescriptorSetLayout vkDescriptorSetLayout, int descriptorPoolSize) {
+		System.out.printf("🔷 descriptor pool size: %d\n", descriptorPoolSize);
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			final VkDescriptorPoolSize.Buffer vkDescriptorPoolSizes = vkDescriptorSetLayout.makeDescriptorPoolSizes(stack, descriptorPoolSize);
+
+			final VkDescriptorPoolCreateInfo poolCreateInfo = VkDescriptorPoolCreateInfo.calloc(stack)
+					.sType$Default()
+					.pPoolSizes(vkDescriptorPoolSizes)
+					.maxSets(descriptorPoolSize);
+
+			final LongBuffer pDescriptorPool = stack.mallocLong(1);
+			if (vkCreateDescriptorPool(vkLogicalDevice, poolCreateInfo, null, pDescriptorPool) != VK_SUCCESS) {
+				throw new RuntimeException("Failed to create descriptor pool!");
+			}
+			vkDescriptorPool = pDescriptorPool.get(0);
+		}
+	}
+
+	private void createDescriptorSetsForFramesInFlight(VkDescriptorSetLayout vkDescriptorSetLayout) {
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			final int descriptorSetsCount = frameInFlights.size();
+			final LongBuffer pSetLayouts = stack.mallocLong(descriptorSetsCount);
+			for (int a = 0; a < descriptorSetsCount; ++a) {
+				pSetLayouts.put(a, vkDescriptorSetLayout.getHandle());
+			}
+			final VkDescriptorSetAllocateInfo allocInfo = VkDescriptorSetAllocateInfo.calloc(stack)
+					.sType$Default()
+					.descriptorPool(vkDescriptorPool)
+					.pSetLayouts(pSetLayouts);
+
+			final LongBuffer vkDescriptorSets = stack.mallocLong(descriptorSetsCount);
+			int result = vkAllocateDescriptorSets(vkLogicalDevice, allocInfo, vkDescriptorSets);
+			if (result != VK_SUCCESS) {
+				throw new RuntimeException("Failed to allocate descriptor sets! Error: " + VkTranslate.translateVulkanResult(result));
+			}
+			IntStream.range(0, frameInFlights.size()).forEach(index -> {
+				long vkDescriptorSet = vkDescriptorSets.get(index);
+				frameInFlights.get(index).setDescriptorSet(vkDescriptorSet);
+			});
+			int index = 0;
+			for (FrameInFlight frameInFlight : frameInFlights) {
+				long vkDescriptorSet = vkDescriptorSets.get(index);
+				frameInFlight.setDescriptorSet(vkDescriptorSet);
+				index++;
+			}
+		}
+	}
+
+	public static VkWriteDescriptorSet.Buffer makeWriteDescriptorSet(long vkDescriptorSet, List<DescriptorSetUpdate> descriptorSetUpdates) {
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			final int updatesCount = descriptorSetUpdates.size();
+			final VkWriteDescriptorSet.Buffer buffer = VkWriteDescriptorSet.calloc(updatesCount, stack);
+
+			System.out.printf("Making %d VkWriteDescriptorSets...\n", updatesCount);
+			for (int index = 0; index < updatesCount; ++index) {
+				final DescriptorSetUpdate descriptorSetUpdate = descriptorSetUpdates.get(index);
+				final long vkBuffer = descriptorSetUpdate.bufferHandle();
+				System.out.printf("🔷 vkBuffer: %s | type: %s | offset: %d | range: %d\n", String.format("0x%08x", vkBuffer),
+						VkTranslate.translateDescriptorType(descriptorSetUpdate.descriptorType()), descriptorSetUpdate.bufferOffset(), descriptorSetUpdate.bufferRange());
+				if (!descriptorSetUpdate.image()) {
+					final VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack)
+							.buffer(vkBuffer)
+							.offset(descriptorSetUpdate.bufferOffset())
+							.range(descriptorSetUpdate.bufferRange());
+
+					buffer.put(index, VkWriteDescriptorSet.calloc(stack)
+							.sType$Default()
+							.dstSet(vkDescriptorSet)
+							.dstBinding(descriptorSetUpdate.binding())
+							.dstArrayElement(0)
+							.descriptorType(descriptorSetUpdate.descriptorType())
+							.descriptorCount(1)
+							.pBufferInfo(bufferInfo)
+							.pImageInfo(null)
+							.pTexelBufferView(null));
+				} else {
+					final VkDescriptorImageInfo.Buffer imageInfo = VkDescriptorImageInfo.calloc(1, stack)
+							.imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+							.imageView(descriptorSetUpdate.imageView())
+							.sampler(descriptorSetUpdate.imageSampler());
+
+					buffer.put(index, VkWriteDescriptorSet.calloc(stack)
+							.sType$Default()
+							.dstSet(vkDescriptorSet)
+							.dstBinding(descriptorSetUpdate.binding())
+							.dstArrayElement(0)
+							.descriptorType(descriptorSetUpdate.descriptorType())
+							.descriptorCount(1)
+							.pBufferInfo(null)
+							.pImageInfo(imageInfo)
+							.pTexelBufferView(null));
+				}
+			}
+			return buffer;
+		}
+	}
+
+	public void beginRendering(VkCommandBuffer vkCommandBuffer) {
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			VkHelper.beginRendering(stack, vkCommandBuffer,
+					vkSwapChainImages.get(currentImageIndex),
+					vkSwapChainImageViews[currentImageIndex],
+					VkHelper.vkGetClearValue(stack, 0, 0, 0, 255),
+					vkExtent2D.width(),
+					vkExtent2D.height());
+		}
+	}
+
+	public void setViewport(VkCommandBuffer vkCommandBuffer) {
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			VkHelper.setViewport(stack, vkCommandBuffer, vkExtent2D.width(), vkExtent2D.height());
+		}
+	}
+
+	public void setScissor(VkCommandBuffer vkCommandBuffer) {
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			VkHelper.setScissor(stack, vkCommandBuffer, vkExtent2D.width(), vkExtent2D.height());
+		}
+	}
+
+	public void endRendering(VkCommandBuffer vkCommandBuffer) {
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			VkHelper.endRendering(stack, vkCommandBuffer, vkSwapChainImages.get(currentImageIndex));
+		}
+	}
+
+	public void bindDescriptorSet(VkCommandBuffer vkCommandBuffer, VkGraphicsPipeline vkGraphicsPipeline) {
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			final FrameInFlight frameInFlight = frameInFlights.get(currentFrame);
+			final LongBuffer pDescriptorSet = stack.longs(frameInFlight.getVkDescriptorSet());
+			vkCmdBindDescriptorSets(vkCommandBuffer,
+					VK_PIPELINE_BIND_POINT_GRAPHICS,
+					vkGraphicsPipeline.getVkPipelineLayout(), 0, pDescriptorSet, null);
+		}
+	}
+
+	public VkCommandBuffer startRecording() {
+		final FrameInFlight frameInFlight = frameInFlights.get(currentFrame);
+		final VkCommandBuffer vkCommandBuffer = frameInFlight.getVkCommandBuffer();
+		VkHelper.beginCommandBuffer(vkCommandBuffer);
+		return vkCommandBuffer;
+	}
+
+	public void stopRecording() {
+		final FrameInFlight frameInFlight = frameInFlights.get(currentFrame);
+		final VkCommandBuffer vkCommandBuffer = frameInFlight.getVkCommandBuffer();
+		VkHelper.endCommandBuffer(vkCommandBuffer);
+	}
+
+	public void submit() {
+		final FrameInFlight frameInFlight = frameInFlights.get(currentFrame);
+		final VkCommandBuffer vkCommandBuffer = frameInFlight.getVkCommandBuffer();
+
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			final VkQueueInfo graphicsQueue = getVkGraphicsQueue();
+
+			final VkSubmitInfo2 submitInfo = getSubmitInfo(stack, vkCommandBuffer, frameInFlight);
+			final VkSubmitInfo2.Buffer submitInfoBuffer = VkSubmitInfo2.calloc(1, stack);
+			submitInfoBuffer.put(0, submitInfo);
+			final int result = vkQueueSubmit2(graphicsQueue.getQueue(), submitInfoBuffer, frameInFlight.getVkInFlightFence());
+			if (result != VK_SUCCESS) {
+				throw new RuntimeException("Failed to submit command buffer! " + VkTranslate.translateVulkanResult(result));
+			}
+		}
+	}
+
+	public void recreateSwapChain() {
+		this.shouldRecreateSwapChain = true;
+	}
+
+	public FrameInFlight getCurrentFrameInFlight() {
+		return frameInFlights.get(currentFrame);
 	}
 }
