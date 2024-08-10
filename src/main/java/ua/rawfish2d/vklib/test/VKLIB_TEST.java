@@ -325,6 +325,15 @@ public class VKLIB_TEST {
 	}
 
 	public static void main(String[] args) {
-		new VKLIB_TEST();
+		try {
+			new VKLIB_TEST();
+		} catch (Exception e) {
+			e.printStackTrace();
+			try {
+				Thread.sleep(900_000L);
+			} catch (InterruptedException ex) {
+				;
+			}
+		}
 	}
 }
