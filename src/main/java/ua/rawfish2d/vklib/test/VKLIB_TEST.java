@@ -174,15 +174,6 @@ public class VKLIB_TEST {
 
 	private void render() {
 		vkDeviceInstance.acquireImage();
-		// TODO buffer updating/uploading
-		// TODO command buffer recording...
-		// TODO command buffer submitting
-//		int result = vkQueueSubmit(vkGraphicsQueue, submitInfo, drawCommand.getFramebuffer().getVkInFlightFence());
-//		if (result != VK_SUCCESS) {
-//			throw new RuntimeException("Failed to submit command buffer! " + VkHelper.translateVulkanResult(result));
-//		}
-
-//		vkDeviceInstance.renderNothing(imageIndex);
 
 		final VkCommandBuffer vkCommandBuffer = vkDeviceInstance.startRecording();
 
@@ -197,7 +188,6 @@ public class VKLIB_TEST {
 			buffer.putFloat(0, screenWidth);
 			buffer.putFloat(4, screenHeight);
 			uniformBuffer.uploadFromStagingBuffer(vkCommandBuffer);
-
 			uniformBuffer.uniformBarrier(vkCommandBuffer);
 		}
 
@@ -264,7 +254,7 @@ public class VKLIB_TEST {
 				.lineWidth(1f) // optional
 				.cullModeFront() // optional
 				.windingCounterClockwise() // optional
-				.blending(true) // optional
+				.blending(false) // optional
 				.blendFunc(VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA) // optional
 				// depth is not supported yet
 				.setDescriptorSetLayout(descriptorSetLayout)

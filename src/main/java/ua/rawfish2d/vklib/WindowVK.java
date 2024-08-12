@@ -79,7 +79,7 @@ public class WindowVK {
 				} else {
 					System.out.printf("Switching to windowed: %dx%d %d\n", width, height, mode.refreshRate());
 					glfwSetWindowAttrib(handle, GLFW_DECORATED, GLFW_TRUE);
-					glfwSetWindowMonitor(handle, 0L, 0, 0, width, height, mode.refreshRate());
+					glfwSetWindowMonitor(handle, 0L, 50, 50, width, height, mode.refreshRate());
 					resizeWindow(width, height);
 				}
 			}
