@@ -24,26 +24,21 @@ public class WindowVK {
 	private boolean visible = true;
 	private boolean alwaysOnTop = false;
 	private boolean maximized = false;
-	private static boolean init = false;
 
 	public WindowVK() {
 	}
 
-	public static void init() {
+	public void init() {
 		if (!glfwInit()) {
 			throw new RuntimeException("Failed to init GLFW!");
-		}
-		init = true;
-	}
-
-	public void create(int width, int height, String title) {
-		if (!init) {
-			init();
 		}
 		if (!glfwVulkanSupported()) {
 			throw new AssertionError("GLFW failed to find the Vulkan loader");
 		}
+	}
 
+	public void create(int width, int height, String title) {
+		glfwDefaultWindowHints();
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, resizable ? GLFW_TRUE : GLFW_FALSE);
 		glfwWindowHint(GLFW_DECORATED, decorated ? GLFW_TRUE : GLFW_FALSE);

@@ -4,7 +4,6 @@ import lombok.Getter;
 import org.lwjgl.stb.STBImage;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
-import ua.rawfish2d.vklib.VkBuffer;
 import ua.rawfish2d.vklib.init.VkDeviceInstance;
 import ua.rawfish2d.vklib.init.data.VkQueueInfo;
 import ua.rawfish2d.vklib.init.enums.TextureFiltering;

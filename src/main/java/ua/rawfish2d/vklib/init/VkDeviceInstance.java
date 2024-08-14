@@ -2,6 +2,7 @@ package ua.rawfish2d.vklib.init;
 
 import lombok.Getter;
 import org.lwjgl.PointerBuffer;
+import org.lwjgl.system.JNI;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
@@ -26,14 +27,16 @@ import static org.lwjgl.system.MemoryUtil.*;
 import static org.lwjgl.vulkan.KHRDynamicRendering.VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRSurface.*;
 import static org.lwjgl.vulkan.KHRSwapchain.*;
+import static org.lwjgl.vulkan.KHRSynchronization2.vkQueueSubmit2KHR;
 import static org.lwjgl.vulkan.VK10.*;
-import static org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2;
 import static org.lwjgl.vulkan.VK13.VK_API_VERSION_1_3;
 import static org.lwjgl.vulkan.VK13.vkQueueSubmit2;
 
 @Getter
 public class VkDeviceInstance {
 	private static final List<String> validationLayers = new ArrayList<>();
+	private static final List<String> instanceLayers = new ArrayList<>();
+	private static final List<String> deviceLayers = new ArrayList<>();
 	private static final List<String> requiredDeviceExtensions = new ArrayList<>();
 	private final List<VkQueueInfo> vkQueueDataList = new ArrayList<>();
 	private WindowVK windowVK;
@@ -64,7 +67,11 @@ public class VkDeviceInstance {
 	private final List<FrameInFlight> frameInFlights = new ArrayList<>();
 
 	static {
+		instanceLayers.add("VK_LAYER_KHRONOS_synchronization2");
+		deviceLayers.add("VK_LAYER_KHRONOS_synchronization2");
+
 		validationLayers.add("VK_LAYER_KHRONOS_validation");
+
 		requiredDeviceExtensions.add(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 		requiredDeviceExtensions.add(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
 		requiredDeviceExtensions.add("VK_KHR_synchronization2");
@@ -117,7 +124,21 @@ public class VkDeviceInstance {
 			vkSurface = pSurface.get(0);
 		}
 		pickPhysicalDevice();
+		VkHelper.printMemoryTypes(vkPhysicalDevice);
 		createLogicalDevice();
+
+		System.out.printf("vkGetInstanceProcAddr\n");
+		System.out.printf("vkQueueSubmit2 address: %d\n", vkGetInstanceProcAddr(vkInstance, "vkQueueSubmit2"));
+		System.out.printf("vkQueueSubmit2KHR address: %d\n", vkGetInstanceProcAddr(vkInstance, "vkQueueSubmit2KHR"));
+		System.out.printf("vkCmdBeginRendering address: %d\n", vkGetInstanceProcAddr(vkInstance, "vkCmdBeginRendering"));
+		System.out.printf("vkCmdBeginRenderingKHR address: %d\n", vkGetInstanceProcAddr(vkInstance, "vkCmdBeginRenderingKHR"));
+
+		System.out.printf("vkGetDeviceProcAddr\n");
+		System.out.printf("vkQueueSubmit2 address: %d\n", vkGetDeviceProcAddr(vkLogicalDevice, "vkQueueSubmit2"));
+		System.out.printf("vkQueueSubmit2KHR address: %d\n", vkGetDeviceProcAddr(vkLogicalDevice, "vkQueueSubmit2KHR"));
+		System.out.printf("vkCmdBeginRendering address: %d\n", vkGetDeviceProcAddr(vkLogicalDevice, "vkCmdBeginRendering"));
+		System.out.printf("vkCmdBeginRenderingKHR address: %d\n", vkGetDeviceProcAddr(vkLogicalDevice, "vkCmdBeginRenderingKHR"));
+
 		// swap chain stuff
 		createSwapChain();
 		createImageViews();
@@ -141,26 +162,23 @@ public class VkDeviceInstance {
 					.sType$Default()
 					.pApplicationName(stack.UTF8(applicationName))
 					.applicationVersion(VK_MAKE_VERSION(1, 0, 0))
-					.pEngineName(engineName.isEmpty() ? null : stack.UTF8(engineName)) // stack.UTF8("No Engine")
+					.pEngineName(engineName.isEmpty() ? stack.UTF8("No Engine") : stack.UTF8(engineName))
 					.engineVersion(VK_MAKE_VERSION(1, 0, 0))
 					.apiVersion(VK_API_VERSION_1_3);
 
-			final PointerBuffer requiredExtensions = getRequiredExtensions(stack);
+			final List<String> requiredExtensions = getRequiredExtensions();
+			final PointerBuffer ppEnabledExtensionNames = VkHelper.stringsToPointerBuffer(stack, requiredExtensions);
 
 			final VkInstanceCreateInfo createInfo = VkInstanceCreateInfo.calloc(stack)
 					.sType$Default()
 					.pApplicationInfo(vkAppInto)
-					.ppEnabledExtensionNames(requiredExtensions);
-			if (enableValidationLayers) {
-				final PointerBuffer pValidationLayers = stack.mallocPointer(validationLayers.size());
-				for (int a = 0; a < validationLayers.size(); ++a) {
-					pValidationLayers.put(a, stack.UTF8(validationLayers.get(a)));
-				}
+					.ppEnabledExtensionNames(ppEnabledExtensionNames);
 
-				createInfo.ppEnabledLayerNames(pValidationLayers);
-			} else {
-				createInfo.ppEnabledLayerNames(null);
+			if (enableValidationLayers) {
+				instanceLayers.addAll(validationLayers);
 			}
+			final PointerBuffer pLayers = VkHelper.stringsToPointerBuffer(stack, instanceLayers);
+			createInfo.ppEnabledLayerNames(pLayers);
 
 			final PointerBuffer pInstance = stack.mallocPointer(1);
 			final int result = vkCreateInstance(createInfo, null, pInstance);
@@ -218,6 +236,8 @@ public class VkDeviceInstance {
 			// queue creation
 			final FloatBuffer queuePriorities = stack.floats(0.0f);
 			final VkDeviceQueueCreateInfo.Buffer queueCreateInfoBuffer = VkDeviceQueueCreateInfo.malloc(queueIndices.size(), stack);
+			queueCreateInfoBuffer.sType$Default();
+
 			int index = 0;
 			System.out.printf("🔷 Creating %d queues\n", queueIndices.size());
 			for (VkQueueIndexInfo queueInfo : queueIndices) {
@@ -231,55 +251,20 @@ public class VkDeviceInstance {
 			}
 			// queue creation
 
-			final int requiredDeviceExtensionsCount = requiredDeviceExtensions.size();
-			final PointerBuffer extensions = stack.mallocPointer(requiredDeviceExtensionsCount);
-			for (String name : requiredDeviceExtensions) {
-				extensions.put(stack.UTF8(name));
-			}
-			extensions.flip();
-
-			try (MemoryStack stack2 = MemoryStack.stackPush()) {
-				// check feature support
-				final VkPhysicalDeviceVulkan13Features deviceVulkan13Features = VkPhysicalDeviceVulkan13Features.calloc(stack2)
-						.sType$Default();
-
-				final VkPhysicalDeviceVulkan11Features deviceVulkan11Features = VkPhysicalDeviceVulkan11Features.calloc(stack2)
-						.sType$Default()
-						.pNext(deviceVulkan13Features.address());
-
-				final VkPhysicalDeviceFeatures2 deviceFeatures2 = VkPhysicalDeviceFeatures2.calloc(stack2)
-						.sType$Default()
-						.pNext(deviceVulkan11Features.address());
-
-				vkGetPhysicalDeviceFeatures2(vkPhysicalDevice, deviceFeatures2);
-
-				final VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc(stack2);
-				vkGetPhysicalDeviceFeatures(vkPhysicalDevice, deviceFeatures);
-
-				System.out.printf("shader draw parameters: %b\n", deviceVulkan11Features.shaderDrawParameters());
-				System.out.printf("dynamic rendering: %b\n", deviceVulkan13Features.dynamicRendering());
-				System.out.printf("synchronization2: %b\n", deviceVulkan13Features.synchronization2());
-				System.out.printf("sampler anisotropy: %b\n", deviceFeatures.samplerAnisotropy());
-				System.out.printf("multiDrawIndirect: %b\n", deviceFeatures.multiDrawIndirect());
-			}
-
-			final VkPhysicalDeviceVulkan13Features deviceVulkan13Features = VkPhysicalDeviceVulkan13Features.calloc(stack)
-					.sType$Default();
-
-			final VkPhysicalDeviceVulkan11Features deviceVulkan11Features = VkPhysicalDeviceVulkan11Features.calloc(stack)
+			final VkPhysicalDeviceVulkan13Features vulkan13Features = VkPhysicalDeviceVulkan13Features.calloc(stack)
 					.sType$Default()
-					.pNext(deviceVulkan13Features.address());
+					.synchronization2(true)
+					.dynamicRendering(true);
 
-			final VkPhysicalDeviceFeatures2 deviceFeatures2 = VkPhysicalDeviceFeatures2.calloc(stack)
+			final VkPhysicalDeviceFeatures2 physicalDeviceFeatures2 = VkPhysicalDeviceFeatures2.calloc(stack)
 					.sType$Default()
-					.pNext(deviceVulkan11Features.address());
+					.pNext(vulkan13Features.address());
 
-			deviceVulkan11Features.shaderDrawParameters(true);
-			deviceVulkan13Features.dynamicRendering(true);
-			deviceVulkan13Features.synchronization2(true);
-			deviceFeatures2.features().samplerAnisotropy(true);
-			deviceFeatures2.features().multiDrawIndirect(true);
+			physicalDeviceFeatures2.features().geometryShader(true);
+			physicalDeviceFeatures2.features().samplerAnisotropy(true);
+			physicalDeviceFeatures2.features().multiDrawIndirect(true);
 
+			final PointerBuffer extensions = VkHelper.stringsToPointerBuffer(stack, requiredDeviceExtensions);
 			// can be malloc() only if all fields are explicitly set
 			// otherwise use calloc()
 			// generally, if you allocate memory which will be immediately rewritten - use malloc
@@ -289,16 +274,13 @@ public class VkDeviceInstance {
 					.pQueueCreateInfos(queueCreateInfoBuffer)
 					.ppEnabledExtensionNames(extensions)
 					.pEnabledFeatures(null) // deviceFeatures or null if pNext is not null
-					.pNext(deviceFeatures2.address()); // deviceFeatures2
+					.pNext(physicalDeviceFeatures2.address()); // deviceFeatures2
+
 			if (enableValidationLayers) {
-				final PointerBuffer pValidationLayers = stack.mallocPointer(validationLayers.size());
-				for (int a = 0; a < validationLayers.size(); ++a) {
-					pValidationLayers.put(a, stack.UTF8(validationLayers.get(a)));
-				}
-				createInfo.ppEnabledLayerNames(pValidationLayers);
-			} else {
-				createInfo.ppEnabledLayerNames(null);
+				deviceLayers.addAll(validationLayers);
 			}
+			final PointerBuffer pLayers = VkHelper.stringsToPointerBuffer(stack, deviceLayers);
+			createInfo.ppEnabledLayerNames(pLayers);
 
 			final PointerBuffer pDevice = stack.mallocPointer(1);
 			final int result = vkCreateDevice(vkPhysicalDevice, createInfo, null, pDevice);
@@ -316,6 +298,12 @@ public class VkDeviceInstance {
 				final long vkQueueHandle = pQueue.get(0);
 				final VkQueue vkQueue = new VkQueue(vkQueueHandle, vkLogicalDevice);
 				System.out.printf("🔷 vkGetDeviceQueue queue type: %s | index: %d | present: %b | handle: %s\n", VkTranslate.translateQueueBit(queueInfo.queueType()), queueInfo.queueIndex(), queueInfo.presentSupport(), String.format("0x%08x", vkQueueHandle));
+				System.out.printf("queue.getCapabilities().vkQueueSubmit2: %d\n", vkQueue.getCapabilities().vkQueueSubmit2);
+				System.out.printf("queue.getCapabilities().vkQueueSubmit2KHR: %d\n", vkQueue.getCapabilities().vkQueueSubmit2KHR);
+				System.out.printf("queue.getCapabilities().vkCmdBeginRendering: %d\n", vkQueue.getCapabilities().vkCmdBeginRendering);
+				System.out.printf("queue.getCapabilities().vkCmdBeginRenderingKHR: %d\n", vkQueue.getCapabilities().vkCmdBeginRenderingKHR);
+				System.out.printf("queue.getCapabilities().vkCmdPipelineBarrier2: %d\n", vkQueue.getCapabilities().vkCmdPipelineBarrier2);
+				System.out.printf("queue.getCapabilities().vkCmdPipelineBarrier2KHR: %d\n", vkQueue.getCapabilities().vkCmdPipelineBarrier2KHR);
 				this.vkQueueDataList.add(new VkQueueInfo(vkLogicalDevice, vkQueue, queueInfo));
 			}
 		}
@@ -427,24 +415,23 @@ public class VkDeviceInstance {
 		return queueInfoList;
 	}
 
-	private PointerBuffer getRequiredExtensions(MemoryStack stack) {
+	private List<String> getRequiredExtensions() {
+		final List<String> extensions = new ArrayList<>();
 		final PointerBuffer requiredExtensions = glfwGetRequiredInstanceExtensions();
 		if (requiredExtensions == null) {
 			throw new AssertionError("Failed to get required instance extensions!");
 		}
 		final int requiredExtensionsCount = requiredExtensions.capacity();
-		final PointerBuffer ppEnabledExtensionNames = stack.mallocPointer(requiredExtensionsCount);
-		ppEnabledExtensionNames.put(requiredExtensions);
-		ppEnabledExtensionNames.flip();
 
 		System.out.printf("🔷 Required extensions: %d\n", requiredExtensionsCount);
 		for (int index = 0; index < requiredExtensionsCount; ++index) {
-			long pointer = requiredExtensions.get(index);
-			String string = memUTF8(pointer);
+			final long pointer = requiredExtensions.get(index);
+			final String string = memUTF8(pointer);
 			System.out.printf("\t[%d] %s\n", index, string);
+			extensions.add(string);
 		}
 
-		return ppEnabledExtensionNames;
+		return extensions;
 	}
 
 	private long getBestPhysicalDevice(int deviceCount, PointerBuffer pPhysicalDevice) {
@@ -829,35 +816,14 @@ public class VkDeviceInstance {
 
 		vkDeviceWaitIdle(vkLogicalDevice);
 
-		// cleanupSwapChain();
-		// destroy framebuffers and their image view
-//		if (!useDynamicRendering) {
-//			for (FrameInFlight framebuffer : frameInFlights) {
-//				framebuffer.onRecreateSwapChain_1(vkLogicalDevice);
-//			}
-//		}
+		// destroy old swapchain
+		for (long imageView : vkSwapChainImageViews) {
+			vkDestroyImageView(vkLogicalDevice, imageView, null);
+		}
 		vkDestroySwapchainKHR(vkLogicalDevice, vkSwapchainKHR, null);
-		//
 
 		createSwapChain();
 		createImageViews();
-
-		// createFramebuffers();
-		// create framebuffers and image views again
-//		if (!useDynamicRendering) {
-//			for (int a = 0; a < framebufferList.size(); ++a) {
-//				final Framebuffer framebuffer = framebufferList.get(a);
-//				framebuffer.onRecreateSwapChain_2(vkLogicalDevice, vkExtent2D, vkRenderPass, vkSwapchainKHR, vkSwapChainImages.get(a), vkSwapChainImageViews[a]);
-//			}
-//		}
-		//
-
-		// remove this and enable Riva Tuner Overlay for really cool visual glitch, and also trigger this function
-		// invalidate cached command buffers
-//		for (VkMTDRAW.DrawCommand drawCommand : drawCommands) {
-//			drawCommand.setDrawAndUploadCommandCached(false);
-//			drawCommand.setDrawCommandCached(false);
-//		}
 	}
 
 	private void sleep(long ms) {
@@ -953,24 +919,50 @@ public class VkDeviceInstance {
 		vkDestroyInstance(vkInstance, null);
 	}
 
-	public void renderNothing(int imageIndex) {
-		final FrameInFlight frameInFlight = frameInFlights.get(currentFrame);
-		final VkCommandBuffer vkCommandBuffer = frameInFlight.getVkCommandBuffer();
-		VkHelper.beginCommandBuffer(vkCommandBuffer);
-		recordTestCommandBuffer(vkCommandBuffer, imageIndex);
-		VkHelper.endCommandBuffer(vkCommandBuffer);
+//	public void renderNothing(int imageIndex) {
+//		final FrameInFlight frameInFlight = frameInFlights.get(currentFrame);
+//		final VkCommandBuffer vkCommandBuffer = frameInFlight.getVkCommandBuffer();
+//		VkHelper.beginCommandBuffer(vkCommandBuffer);
+//		recordTestCommandBuffer(vkCommandBuffer, imageIndex);
+//		VkHelper.endCommandBuffer(vkCommandBuffer);
+//
+//		try (MemoryStack stack = MemoryStack.stackPush()) {
+//			final VkQueueInfo graphicsQueue = getVkGraphicsQueue();
+//
+//			final VkSubmitInfo2KHR submitInfo = getSubmitInfo(stack, vkCommandBuffer, frameInFlight);
+//			final VkSubmitInfo2KHR.Buffer submitInfoBuffer = VkSubmitInfo2KHR.calloc(1, stack);
+//			submitInfoBuffer.put(0, submitInfo);
+//			final int result = vkQueueSubmit2(graphicsQueue.getQueue(), submitInfoBuffer, frameInFlight.getVkInFlightFence());
+//			if (result != VK_SUCCESS) {
+//				throw new RuntimeException("Failed to submit command buffer! " + VkTranslate.translateVulkanResult(result));
+//			}
+//		}
+//	}
 
-		try (MemoryStack stack = MemoryStack.stackPush()) {
-			final VkQueueInfo graphicsQueue = getVkGraphicsQueue();
+	public VkSubmitInfo2KHR getSubmitInfoKHR(MemoryStack stack, VkCommandBuffer commandBuffer, FrameInFlight frameInFlight) {
+		final VkSubmitInfo2KHR submitInfo = VkSubmitInfo2KHR.calloc(stack)
+				.sType$Default()
+				.pWaitSemaphoreInfos(VkSemaphoreSubmitInfoKHR.calloc(1, stack).put(0, VkSemaphoreSubmitInfoKHR.calloc(stack)))
+				.pCommandBufferInfos(VkCommandBufferSubmitInfoKHR.calloc(1, stack).put(0, VkCommandBufferSubmitInfoKHR.calloc(stack)))
+				.pSignalSemaphoreInfos(VkSemaphoreSubmitInfoKHR.calloc(1, stack).put(0, VkSemaphoreSubmitInfoKHR.calloc(stack)));
 
-			final VkSubmitInfo2 submitInfo = getSubmitInfo(stack, vkCommandBuffer, frameInFlight);
-			final VkSubmitInfo2.Buffer submitInfoBuffer = VkSubmitInfo2.calloc(1, stack);
-			submitInfoBuffer.put(0, submitInfo);
-			final int result = vkQueueSubmit2(graphicsQueue.getQueue(), submitInfoBuffer, frameInFlight.getVkInFlightFence());
-			if (result != VK_SUCCESS) {
-				throw new RuntimeException("Failed to submit command buffer! " + VkTranslate.translateVulkanResult(result));
-			}
-		}
+		submitInfo.pWaitSemaphoreInfos().get(0)
+				.sType$Default()
+				.deviceIndex(0)
+				.stageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
+				.semaphore(frameInFlight.getVkImageAvailableSemaphore());
+
+		submitInfo.pCommandBufferInfos().get(0)
+				.sType$Default()
+				.commandBuffer(commandBuffer)
+				.deviceMask(0);
+
+		submitInfo.pSignalSemaphoreInfos().get(0)
+				.sType$Default()
+				.deviceIndex(0)
+				.stageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
+				.semaphore(frameInFlight.getVkRenderFinishedSemaphore());
+		return submitInfo;
 	}
 
 	public VkSubmitInfo2 getSubmitInfo(MemoryStack stack, VkCommandBuffer commandBuffer, FrameInFlight frameInFlight) {
@@ -999,33 +991,33 @@ public class VkDeviceInstance {
 		return submitInfo;
 	}
 
-	public void recordTestCommandBuffer(VkCommandBuffer commandBuffer, int imageIndex) {
-		try (MemoryStack stack = MemoryStack.stackPush()) {
-			VkHelper.beginRendering(stack, commandBuffer,
-					vkSwapChainImages.get(imageIndex),
-					vkSwapChainImageViews[imageIndex],
-					VkHelper.vkGetClearValue(stack, 0, 0, 0, 0),
-					vkExtent2D.width(),
-					vkExtent2D.height());
-
-			VkHelper.setViewport(stack, commandBuffer, vkExtent2D.width(), vkExtent2D.height());
-			VkHelper.setScissor(stack, commandBuffer, vkExtent2D.width(), vkExtent2D.height());
-
-//          vkGraphicsPipeline.bindPipeline(commandBuffer);
-
-//			vkVertexBuffer.bindVertexBuffer(commandBuffer);
-//			vkIndexBuffer.bindIndexBuffer(commandBuffer, VK_INDEX_TYPE_UINT32);
-
-//			final LongBuffer pDescriptorSet = stack.longs(descriptor.getDescriptorSet(imageIndex));
-//			vkCmdBindDescriptorSets(commandBuffer,
-//					VK_PIPELINE_BIND_POINT_GRAPHICS,
-//					vkGraphicsPipeline.getVkPipelineLayout(), 0, pDescriptorSet, null);
-
-//			vkCmdDrawIndexedIndirect(commandBuffer, vkIndirectBuffer.getBufferHandle(), 0, 10, 5 * 4);
-
-			VkHelper.endRendering(stack, commandBuffer, vkSwapChainImages.get(imageIndex));
-		}
-	}
+//	public void recordTestCommandBuffer(VkCommandBuffer commandBuffer, int imageIndex) {
+//		try (MemoryStack stack = MemoryStack.stackPush()) {
+//			VkHelper.beginRendering(stack, commandBuffer,
+//					vkSwapChainImages.get(imageIndex),
+//					vkSwapChainImageViews[imageIndex],
+//					VkHelper.vkGetClearValue(stack, 0, 0, 0, 0),
+//					vkExtent2D.width(),
+//					vkExtent2D.height());
+//
+//			VkHelper.setViewport(stack, commandBuffer, vkExtent2D.width(), vkExtent2D.height());
+//			VkHelper.setScissor(stack, commandBuffer, vkExtent2D.width(), vkExtent2D.height());
+//
+////          vkGraphicsPipeline.bindPipeline(commandBuffer);
+//
+////			vkVertexBuffer.bindVertexBuffer(commandBuffer);
+////			vkIndexBuffer.bindIndexBuffer(commandBuffer, VK_INDEX_TYPE_UINT32);
+//
+////			final LongBuffer pDescriptorSet = stack.longs(descriptor.getDescriptorSet(imageIndex));
+////			vkCmdBindDescriptorSets(commandBuffer,
+////					VK_PIPELINE_BIND_POINT_GRAPHICS,
+////					vkGraphicsPipeline.getVkPipelineLayout(), 0, pDescriptorSet, null);
+//
+////			vkCmdDrawIndexedIndirect(commandBuffer, vkIndirectBuffer.getBufferHandle(), 0, 10, 5 * 4);
+//
+//			VkHelper.endRendering(stack, commandBuffer, vkSwapChainImages.get(imageIndex));
+//		}
+//	}
 
 	public void presentImage() {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -1217,6 +1209,14 @@ public class VkDeviceInstance {
 		VkHelper.endCommandBuffer(vkCommandBuffer);
 	}
 
+	public enum QueueSubmitMode {
+		DEVICE,
+		EXTENSION,
+		DEVICE_NATIVE
+	}
+
+	public QueueSubmitMode queueSubmitMode = QueueSubmitMode.EXTENSION;
+
 	public void submit() {
 		final FrameInFlight frameInFlight = frameInFlights.get(currentFrame);
 		final VkCommandBuffer vkCommandBuffer = frameInFlight.getVkCommandBuffer();
@@ -1224,10 +1224,36 @@ public class VkDeviceInstance {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			final VkQueueInfo graphicsQueue = getVkGraphicsQueue();
 
-			final VkSubmitInfo2 submitInfo = getSubmitInfo(stack, vkCommandBuffer, frameInFlight);
-			final VkSubmitInfo2.Buffer submitInfoBuffer = VkSubmitInfo2.calloc(1, stack);
-			submitInfoBuffer.put(0, submitInfo);
-			final int result = vkQueueSubmit2(graphicsQueue.getQueue(), submitInfoBuffer, frameInFlight.getVkInFlightFence());
+			int result = VK_ERROR_UNKNOWN;
+			if (queueSubmitMode == QueueSubmitMode.DEVICE) {
+				// this crashes inside RenderDoc for me for some reason
+				final VkSubmitInfo2 submitInfo = getSubmitInfo(stack, vkCommandBuffer, frameInFlight);
+				final VkSubmitInfo2.Buffer submitInfoBuffer = VkSubmitInfo2.calloc(1, stack);
+				submitInfoBuffer.put(0, submitInfo);
+
+				result = vkQueueSubmit2(graphicsQueue.getQueue(), submitInfoBuffer, frameInFlight.getVkInFlightFence());
+			} else if (queueSubmitMode == QueueSubmitMode.EXTENSION) {
+				// this should work fine
+				final VkSubmitInfo2KHR submitInfo = getSubmitInfoKHR(stack, vkCommandBuffer, frameInFlight);
+				final VkSubmitInfo2KHR.Buffer submitInfoBuffer = VkSubmitInfo2KHR.calloc(1, stack);
+				submitInfoBuffer.put(0, submitInfo);
+
+				result = vkQueueSubmit2KHR(graphicsQueue.getQueue(), submitInfoBuffer, frameInFlight.getVkInFlightFence());
+			} else if (queueSubmitMode == QueueSubmitMode.DEVICE_NATIVE) {
+				// this should also always work
+				final VkSubmitInfo2 submitInfo = getSubmitInfo(stack, vkCommandBuffer, frameInFlight);
+				final VkSubmitInfo2.Buffer submitInfoBuffer = VkSubmitInfo2.calloc(1, stack);
+				submitInfoBuffer.put(0, submitInfo);
+
+				long __functionAddress = vkGetInstanceProcAddr(vkInstance, "vkQueueSubmit2");
+				result = JNI.callPPJI(
+						graphicsQueue.getQueue().address(),
+						submitInfoBuffer.remaining(),
+						submitInfoBuffer.address(),
+						frameInFlight.getVkInFlightFence(),
+						__functionAddress);
+			}
+
 			if (result != VK_SUCCESS) {
 				throw new RuntimeException("Failed to submit command buffer! " + VkTranslate.translateVulkanResult(result));
 			}

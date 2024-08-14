@@ -17,7 +17,9 @@ import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 import java.text.CharacterIterator;
 import java.text.StringCharacterIterator;
+import java.util.List;
 import java.util.Locale;
+import java.util.stream.IntStream;
 
 import static org.lwjgl.BufferUtils.createByteBuffer;
 import static org.lwjgl.system.MemoryUtil.memUTF8;
@@ -26,30 +28,64 @@ import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdBeginRenderingKHR;
 import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR;
 import static org.lwjgl.vulkan.KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR;
+import static org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR;
 import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK13.VK_ACCESS_NONE;
-import static org.lwjgl.vulkan.VK13.vkCmdPipelineBarrier2;
 
 public class VkHelper {
 
-	public static int findMemoryType(VkPhysicalDevice vkPhysicalDevice, int typeFilter, int properties, MemoryStack stack) {
+	public static int findMemoryType(VkPhysicalDevice vkPhysicalDevice, int typeBits, int properties, MemoryStack stack) {
 		final VkPhysicalDeviceMemoryProperties memProperties = VkPhysicalDeviceMemoryProperties.malloc(stack);
 		vkGetPhysicalDeviceMemoryProperties(vkPhysicalDevice, memProperties);
 
-//		for (int a = 0; a < memProperties.memoryTypeCount(); a++) {
-//			final int memoryPropertyFlags = memProperties.memoryTypes().get(a).propertyFlags();
-//			System.out.printf("Memory Property[%d]: %s\n", a, VKUtil.vkTranlateMemoryProperty(memoryPropertyFlags));
-//		}
-
+		System.out.printf("🔷 Searching for memory:" +
+				"\n\tbits: %d %s" +
+				"\n\ttype: %d %s\n", typeBits, VkTranslate.vkTranslateMemoryProperty(typeBits), properties, VkTranslate.vkTranslateMemoryProperty(properties));
+		int memoryIndex = 0;
+		int flags = 0;
 		for (int index = 0; index < memProperties.memoryTypeCount(); index++) {
-			final int memoryPropertyFlags = memProperties.memoryTypes().get(index).propertyFlags();
+			final VkMemoryType memoryType = memProperties.memoryTypes().get(index);
+			final int propertyFlags = memoryType.propertyFlags();
 
-			if ((typeFilter & (1 << index)) >= 1 && (memoryPropertyFlags & properties) == properties) {
-				System.out.printf("Chose memory index %d with flags: %s\n", index, VkTranslate.vkTranslateMemoryProperty(memoryPropertyFlags));
-				return index;
+			if ((typeBits & 1) == 1) {
+				if ((propertyFlags & properties) == properties) {
+					memoryIndex = memoryType.heapIndex();
+					flags = propertyFlags;
+					break;
+				}
+			}
+//			if ((typeBits & (1 << index)) >= 1 && (memoryPropertyFlags & properties) == properties) {
+//				memoryIndex = memoryType.heapIndex();
+//				flags = memoryPropertyFlags;
+//			}
+			typeBits = typeBits >> 1;
+		}
+		System.out.printf("❇️ Chose memory type index: %d with flags: %d %s\n", memoryIndex, flags, VkTranslate.vkTranslateMemoryProperty(flags));
+		return memoryIndex;
+//		throw new RuntimeException("Failed to find suitable memory type!");
+	}
+
+	public static void printMemoryTypes(VkPhysicalDevice vkPhysicalDevice) {
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			final VkPhysicalDeviceMemoryProperties memProperties = VkPhysicalDeviceMemoryProperties.malloc(stack);
+			vkGetPhysicalDeviceMemoryProperties(vkPhysicalDevice, memProperties);
+
+			System.out.printf("🔷 Memory types:\n");
+			for (int index = 0; index < memProperties.memoryTypeCount(); index++) {
+				final VkMemoryType memoryType = memProperties.memoryTypes().get(index);
+				final int propertyFlags = memoryType.propertyFlags();
+
+				System.out.printf("\t[%d] index: %d flags: %d %s\n", index, memoryType.heapIndex(), propertyFlags, VkTranslate.vkTranslateMemoryProperty(propertyFlags));
+			}
+
+			System.out.printf("🔷 Memory heaps:\n");
+			for (int index = 0; index < memProperties.memoryHeapCount(); index++) {
+				final VkMemoryHeap memoryHeap = memProperties.memoryHeaps().get(index);
+				final int flags = memoryHeap.flags();
+
+				System.out.printf("\t[%d] size: %d | flags: %d %s\n", index, memoryHeap.size(), flags, VkTranslate.vkTranslateMemoryHeapFlags(flags));
 			}
 		}
-		throw new RuntimeException("Failed to find suitable memory type!");
 	}
 
 	public static long createTextureImageView(VkDevice vkLogicalDevice, long vkTextureImage, int vkFormat) {
@@ -159,8 +195,8 @@ public class VkHelper {
 				null,
 				vkImageMemoryBarriers);
 
-		final VkRenderingAttachmentInfo.Buffer vkRenderingAttachmentInfoBuffer = VkRenderingAttachmentInfoKHR.calloc(1, stack);
-		vkRenderingAttachmentInfoBuffer.put(0, VkRenderingAttachmentInfo.calloc(stack)
+		final VkRenderingAttachmentInfoKHR.Buffer vkRenderingAttachmentInfoBuffer = VkRenderingAttachmentInfoKHR.calloc(1, stack);
+		vkRenderingAttachmentInfoBuffer.put(0, VkRenderingAttachmentInfoKHR.calloc(stack)
 				.sType$Default()
 				.imageView(vkSwapChainImageView)
 				.imageLayout(VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR)
@@ -168,14 +204,14 @@ public class VkHelper {
 				.storeOp(VK_ATTACHMENT_STORE_OP_STORE)
 				.clearValue(clearValue));
 
-		final VkRenderingInfoKHR vkRenderingInfoKHR = VkRenderingInfoKHR.calloc(stack)
+		final VkRenderingInfoKHR vkRenderingInfo = VkRenderingInfoKHR.calloc(stack)
 				.sType$Default()
 				.layerCount(1)
 				.pColorAttachments(vkRenderingAttachmentInfoBuffer);
-		vkRenderingInfoKHR.renderArea().offset().set(0, 0);
-		vkRenderingInfoKHR.renderArea().extent().width(extentWidth).height(extentHeight);
+		vkRenderingInfo.renderArea().offset().set(0, 0);
+		vkRenderingInfo.renderArea().extent().width(extentWidth).height(extentHeight);
 
-		vkCmdBeginRenderingKHR(commandBuffer, vkRenderingInfoKHR);
+		vkCmdBeginRenderingKHR(commandBuffer, vkRenderingInfo);
 	}
 
 	public static void endRendering(MemoryStack stack, VkCommandBuffer commandBuffer, long vkSwapChainImage) {
@@ -225,12 +261,12 @@ public class VkHelper {
 
 	public static ByteBuffer glslToSpirv(String classPath, int vulkanStage) throws IOException {
 		// ByteBuffer src = IOUtils.ioResourceToByteBuffer(classPath, 1024);
-		ByteBuffer src = IOUtils.ioFileToByteBuffer(classPath, 1024);
+		ByteBuffer src = IOUtils.ioFileToByteBuffer(classPath, 4096);
 		long compiler = shaderc_compiler_initialize();
 		long options = shaderc_compile_options_initialize();
 		ShadercIncludeResolve resolver;
 		ShadercIncludeResultRelease releaser;
-		shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
+		shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
 		shaderc_compile_options_set_target_spirv(options, shaderc_spirv_version_1_3);
 		shaderc_compile_options_set_optimization_level(options, shaderc_optimization_level_performance);
 		shaderc_compile_options_set_include_callbacks(options, resolver = new ShadercIncludeResolve() {
@@ -505,8 +541,8 @@ public class VkHelper {
 
 	public static void bufferMemoryBarrier2(VkCommandBuffer commandBuffer, long vkBuffer, long bufferSize, int srcAccess, int srcStage, int dstAccess, int dstStage) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
-			final VkBufferMemoryBarrier2.Buffer bufferMemoryBarriers = VkBufferMemoryBarrier2.calloc(1, stack).sType$Default();
-			final VkBufferMemoryBarrier2 vkBufferMemoryBarrier = VkBufferMemoryBarrier2.calloc(stack)
+			final VkBufferMemoryBarrier2KHR.Buffer bufferMemoryBarriers = VkBufferMemoryBarrier2KHR.calloc(1, stack).sType$Default();
+			final VkBufferMemoryBarrier2KHR vkBufferMemoryBarrier = VkBufferMemoryBarrier2KHR.calloc(stack)
 					.sType$Default()
 					.pNext(0)
 					.srcAccessMask(srcAccess)
@@ -520,14 +556,28 @@ public class VkHelper {
 					.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
 			bufferMemoryBarriers.put(0, vkBufferMemoryBarrier);
 
-			final VkDependencyInfo dependencyInfo = VkDependencyInfo.calloc(stack)
+			final VkDependencyInfoKHR dependencyInfo = VkDependencyInfoKHR.calloc(stack)
 					.sType$Default()
 					.dependencyFlags(0)
 					.pMemoryBarriers(null)
 					.pBufferMemoryBarriers(bufferMemoryBarriers)
 					.pImageMemoryBarriers(null);
 
-			vkCmdPipelineBarrier2(commandBuffer, dependencyInfo);
+			vkCmdPipelineBarrier2KHR(commandBuffer, dependencyInfo);
 		}
+	}
+
+	public static PointerBuffer stringsToPointerBuffer(MemoryStack stack, List<String> list) {
+		final int pointerBufferSize = list.size();
+//		if (pointerBufferSize == 0) {
+//			return null;
+//		}
+		final PointerBuffer pointerBuffer = stack.mallocPointer(pointerBufferSize);
+		IntStream.range(0, pointerBufferSize).forEach(index -> {
+			final String str = list.get(index);
+			pointerBuffer.put(index, stack.UTF8(str));
+		});
+		System.out.printf("size: %d | capacity: %d | remaining: %d\n", pointerBufferSize, pointerBuffer.capacity(), pointerBuffer.remaining());
+		return pointerBuffer;
 	}
 }

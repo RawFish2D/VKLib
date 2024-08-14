@@ -1,6 +1,7 @@
 package ua.rawfish2d.vklib.test;
 
 import org.lwjgl.glfw.GLFW;
+import org.lwjgl.glfw.GLFWFramebufferSizeCallback;
 import org.lwjgl.glfw.GLFWKeyCallback;
 import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -42,74 +43,116 @@ public class VKLIB_TEST {
 
 	public VKLIB_TEST() {
 		windowVK = new WindowVK();
+		windowVK.init();
 		windowVK.setTransparentFramebuffer(false);
 		windowVK.create(screenWidth, screenHeight, "VKLib Test");
+		try {
+			windowVK.setKeyCallback(new GLFWKeyCallback() {
+				private final TimeHelper inputTimer = new TimeHelper();
 
-		windowVK.setKeyCallback(new GLFWKeyCallback() {
-			private final TimeHelper inputTimer = new TimeHelper();
+				@Override
+				public void invoke(long hwnd, int key, int scancode, int action, int mods) {
+					if (key == GLFW.GLFW_KEY_F && inputTimer.hasReachedMilli(1000)) {
+						inputTimer.reset();
 
-			@Override
-			public void invoke(long hwnd, int key, int scancode, int action, int mods) {
-				if (key == GLFW.GLFW_KEY_F && inputTimer.hasReachedMilli(1000)) {
-					inputTimer.reset();
+						windowVK.setFullscreen(!windowVK.isFullScreen(), false, screenWidth, screenHeight);
+					}
+					if (key == GLFW.GLFW_KEY_V && inputTimer.hasReachedMilli(250)) {
+						inputTimer.reset();
+						vkDeviceInstance.vsync(!vkDeviceInstance.isVsync());
+						vkDeviceInstance.recreateSwapChain();
+						System.out.printf("Vsync: %b\n", vkDeviceInstance.isVsync());
+					}
+					if (key == GLFW.GLFW_KEY_SPACE && inputTimer.hasReachedMilli(250)) {
+						inputTimer.reset();
+						bulletScene.pause = !bulletScene.pause;
 
-					windowVK.setFullscreen(!windowVK.isFullScreen(), false, screenWidth, screenHeight);
-				}
-				if (key == GLFW.GLFW_KEY_V && inputTimer.hasReachedMilli(250)) {
-					inputTimer.reset();
-					vkDeviceInstance.vsync(!vkDeviceInstance.isVsync());
-					vkDeviceInstance.recreateSwapChain();
-					System.out.printf("Vsync: %b\n", vkDeviceInstance.isVsync());
-				}
-				if (key == GLFW.GLFW_KEY_SPACE && inputTimer.hasReachedMilli(250)) {
-					inputTimer.reset();
-					bulletScene.pause = !bulletScene.pause;
+						if (bulletScene.pause) {
+							System.out.println("Paused");
+						} else {
+							System.out.println("Unpaused");
+						}
+					}
+					if (key == GLFW.GLFW_KEY_R && inputTimer.hasReachedMilli(250)) {
+						inputTimer.reset();
+						bulletScene.resetBullets(vkVertexBuffer, vkIndexBuffer, vkSSBO);
+					}
+					if (key == GLFW.GLFW_KEY_Q && inputTimer.hasReachedMilli(250)) {
+						inputTimer.reset();
+						if (vkDeviceInstance.queueSubmitMode == VkDeviceInstance.QueueSubmitMode.DEVICE) {
+							vkDeviceInstance.queueSubmitMode = VkDeviceInstance.QueueSubmitMode.EXTENSION;
 
-					if (bulletScene.pause) {
-						System.out.println("Paused");
-					} else {
-						System.out.println("Unpaused");
+						} else if (vkDeviceInstance.queueSubmitMode == VkDeviceInstance.QueueSubmitMode.EXTENSION) {
+							vkDeviceInstance.queueSubmitMode = VkDeviceInstance.QueueSubmitMode.DEVICE_NATIVE;
+
+						} else if (vkDeviceInstance.queueSubmitMode == VkDeviceInstance.QueueSubmitMode.DEVICE_NATIVE) {
+							vkDeviceInstance.queueSubmitMode = VkDeviceInstance.QueueSubmitMode.DEVICE;
+						}
+						System.out.printf("Switched queueSubmitMode to: %s\n", vkDeviceInstance.queueSubmitMode);
 					}
 				}
-				if (key == GLFW.GLFW_KEY_R && inputTimer.hasReachedMilli(250)) {
-					inputTimer.reset();
-					bulletScene.resetBullets(vkVertexBuffer, vkIndexBuffer, vkSSBO);
-				}
-			}
-		});
+			});
 
-		Bullet.BulletSceneConfig.size.set(24f, 24f);
+			windowVK.setFramebufferSizeCallback(new GLFWFramebufferSizeCallback() {
+				@Override
+				public void invoke(long window, int width, int height) {
+					updateWindowSize(width, height);
+				}
+			});
+
+			Bullet.BulletSceneConfig.size.set(24f, 24f);
+			Bullet.BulletSceneConfig.windowWidth = screenWidth;
+			Bullet.BulletSceneConfig.windowHeight = screenHeight;
+
+			createVulkanContext();
+			createGraphicsPipeline();
+
+			loadTextures();
+			createUniformBuffers();
+			createSSBO();
+			updateDescriptors();
+
+			createVertexBuffer();
+			createIndexBuffer();
+			vkIndirectBuffer = IndirectBuffer.createIndirectBuffer(vkDeviceInstance, 10, true);
+			createBulletScene();
+
+			windowVK.showWindow();
+
+			mainLoop();
+
+			vkDeviceWaitIdle(vkDeviceInstance.getVkLogicalDevice());
+
+			vkVertexBuffer.destroyAndFreeMemory(vkDeviceInstance);
+			vkIndexBuffer.destroyAndFreeMemory(vkDeviceInstance);
+			vkIndirectBuffer.destroy(vkDeviceInstance);
+			vkTexture.destroy(vkDeviceInstance);
+			vkSSBO.destroyAndFreeMemory(vkDeviceInstance);
+			vkGraphicsPipeline.destroy(vkDeviceInstance);
+
+			vkDeviceInstance.destroy();
+			windowVK.terminate();
+		} catch (Exception e) {
+			e.printStackTrace();
+			System.err.println("Crashed!");
+			while (!windowVK.shouldClose()) {
+				try {
+					Thread.sleep(10);
+				} catch (InterruptedException ignored) {
+					;
+				}
+				windowVK.pollEvents();
+			}
+		}
+		System.exit(0);
+	}
+
+	private void updateWindowSize(int width, int height) {
+		System.out.printf("[updateWindowSize] %d %d\n", width, height);
+		this.screenWidth = width;
+		this.screenHeight = height;
 		Bullet.BulletSceneConfig.windowWidth = screenWidth;
 		Bullet.BulletSceneConfig.windowHeight = screenHeight;
-
-		createVulkanContext();
-		createGraphicsPipeline();
-
-		loadTextures();
-		createUniformBuffers();
-		createSSBO();
-		updateDescriptors();
-
-		createVertexBuffer();
-		createIndexBuffer();
-		vkIndirectBuffer = IndirectBuffer.createIndirectBuffer(vkDeviceInstance, 10, true);
-		createBulletScene();
-
-		windowVK.showWindow();
-
-		mainLoop();
-
-		vkDeviceWaitIdle(vkDeviceInstance.getVkLogicalDevice());
-
-		vkVertexBuffer.destroyAndFreeMemory(vkDeviceInstance);
-		vkIndexBuffer.destroyAndFreeMemory(vkDeviceInstance);
-		vkIndirectBuffer.destroy(vkDeviceInstance);
-		vkTexture.destroy(vkDeviceInstance);
-		vkSSBO.destroyAndFreeMemory(vkDeviceInstance);
-		vkGraphicsPipeline.destroy(vkDeviceInstance);
-
-		vkDeviceInstance.destroy();
-		windowVK.terminate();
 	}
 
 	private void createBulletScene() {
@@ -267,7 +310,7 @@ public class VKLIB_TEST {
 		vkDeviceInstance = new VkDeviceInstance()
 				.applicationName("Vulkan Lib Test")
 				.apiVersion(VK13.VK_API_VERSION_1_3)
-				.validationLayers(false)
+				.validationLayers(true)
 				.vsync(true)
 				.swapChainImageCount(3) // also frames in flight count
 				.create(windowVK);
@@ -315,15 +358,6 @@ public class VKLIB_TEST {
 	}
 
 	public static void main(String[] args) {
-		try {
-			new VKLIB_TEST();
-		} catch (Exception e) {
-			e.printStackTrace();
-			try {
-				Thread.sleep(900_000L);
-			} catch (InterruptedException ex) {
-				;
-			}
-		}
+		new VKLIB_TEST();
 	}
 }

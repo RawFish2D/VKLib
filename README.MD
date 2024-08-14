@@ -32,3 +32,4 @@ Test scene has different key binds:
 - V to toggle vsync.
 - F to toggle full screen.
 - Space to pause/unpase circles movement.
+- Q to switch between different types of queue submit. 

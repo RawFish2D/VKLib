@@ -14,6 +14,7 @@ import static org.lwjgl.vulkan.KHRSwapchain.VK_SUBOPTIMAL_KHR;
 import static org.lwjgl.vulkan.NVRayTracing.*;
 import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK11.VK_ERROR_OUT_OF_POOL_MEMORY;
+import static org.lwjgl.vulkan.VK11.VK_MEMORY_HEAP_MULTI_INSTANCE_BIT;
 
 public class VkTranslate {
 	/**
@@ -241,6 +242,24 @@ public class VkTranslate {
 		}
 		if ((bits & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) == VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) {
 			stringList.add("VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT");
+		}
+		final StringBuilder stringBuilder = new StringBuilder();
+		for (int index = 0; index < stringList.size(); ++index) {
+			stringBuilder.append(stringList.get(index));
+			if (index != stringList.size() - 1) {
+				stringBuilder.append(", ");
+			}
+		}
+		return stringBuilder.toString();
+	}
+
+	public static String vkTranslateMemoryHeapFlags(int bits) {
+		final List<String> stringList = new ArrayList<>();
+		if ((bits & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+			stringList.add("VK_MEMORY_HEAP_DEVICE_LOCAL_BIT");
+		}
+		if ((bits & VK_MEMORY_HEAP_MULTI_INSTANCE_BIT) == VK_MEMORY_HEAP_MULTI_INSTANCE_BIT) {
+			stringList.add("VK_MEMORY_HEAP_MULTI_INSTANCE_BIT");
 		}
 		final StringBuilder stringBuilder = new StringBuilder();
 		for (int index = 0; index < stringList.size(); ++index) {
